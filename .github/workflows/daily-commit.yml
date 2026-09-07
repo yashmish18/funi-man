@@ -1,0 +1,78 @@
+# .github/workflows/daily-commit.yml
+#
+# Runs a small script once a day, then commits and pushes any changes
+# it produces (an entry in activity_log.md) back to the repository.
+#
+# Notes on design choices:
+#   - Uses actions/checkout with a token that has write permission so the
+#     push step at the end works without extra PAT setup.
+#   - Uses `git diff --quiet` to check whether anything actually changed
+#     before committing, so the workflow doesn't fail (or create empty
+#     commits) if the script decided there was nothing new to log.
+#   - `workflow_dispatch` is included so you can manually trigger a run
+#     from the Actions tab to test the setup without waiting for the cron.
+#   - Cron schedules in GitHub Actions are in UTC and are "best effort" —
+#     GitHub may delay runs slightly during periods of high load, so don't
+#     rely on this for anything time-critical.
+
+name: Daily Activity Commit
+
+on:
+  schedule:
+    # Runs every day at 09:00 UTC. Adjust to your preference.
+    # Cron format: minute hour day-of-month month day-of-week
+    - cron: "0 9 * * *"
+  # Allows manually triggering the workflow from the GitHub Actions UI,
+  # which is useful for testing.
+  workflow_dispatch: {}
+
+# Grants the GITHUB_TOKEN permission to push commits back to the repo.
+permissions:
+  contents: write
+
+jobs:
+  update-log:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the repository so the workflow can read/write files.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history isn't necessary for this simple use case;
+          # a shallow checkout is faster.
+          fetch-depth: 1
+
+      # 2. Set up Python so the script can run.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Run the script that updates the log file.
+      - name: Run activity log script
+        run: python scripts/update_activity_log.py
+
+      # 4. Configure Git identity for the commit.
+      #    Using the github-actions bot identity avoids needing a personal
+      #    access token just to make the commit attributable.
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 5. Stage, commit, and push — but only if something actually changed.
+      - name: Commit and push if there are changes
+        run: |
+          git add activity_log.md
+
+          # `git diff --quiet --cached` exits 0 if there are no staged
+          # changes, and 1 if there are. We use that to decide whether
+          # to commit at all, avoiding empty/no-op commits.
+          if git diff --quiet --cached; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: automated daily activity log update"
+            git push
+          fi
+
